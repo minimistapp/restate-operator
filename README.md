@@ -411,7 +411,7 @@ spec:
   storage:
     storageRequestBytes: 2147483648 # 2 GiB
   config: |
-    roles = [ "worker", "admin", "log-server" ]
+    roles = [ "worker", "admin", "log-server", "http-ingress" ]
     auto-provision = true
     default-num-partitions = 128
     default-replication = 2
