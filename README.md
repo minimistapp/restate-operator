@@ -179,21 +179,21 @@ While the `config` field accepts any valid [Restate server configuration](https:
     *   `worker`: Executes service code.
     *   `admin`: Provides the administration API for deployments and cluster management.
     *   `log-server`: Part of the replicated log for durable state.
-    *   `metadata-server`: Part of the Raft-based replicated metadata store. Not required if using object store for metadata.
+    *   `metadata-server`: Manages cluster metadata, either via Raft or an object store.
     *   `http-ingress`: Exposes an HTTP endpoint for invoking services.
 
 *   **`[metadata-client]`**: Configures how the cluster stores its core metadata. This is a critical choice for production deployments.
     *   `type = "replicated"`: Uses a built-in Raft consensus protocol. This is simpler to set up but requires careful management of the Raft cluster members.
-    *   `type = "object-store"`: Uses an S3-compatible object store for metadata, which is simpler to operate particularly if using an object store for snapshots. You must provide the `path` to the bucket.
+    *   `type = "object-store"`: Uses an S3-compatible object store for metadata, which is recommended for production workloads. You must provide the `path` to the bucket.
 
 *   **`[worker.snapshots]`**: Configures durable snapshots of service state, which is essential for fault tolerance and fast recovery.
     *   `destination`: The S3 URI where snapshots will be stored (e.g., `s3://my-bucket/snapshots`).
-    *   `snapshot-interval-num-records`: How many log records are processed in a particular partition before a new snapshot is taken.
+    *   `snapshot-interval-num-records`: How many state-mutating records are processed before a new snapshot is taken.
 
 *   **`auto-provision`**: A boolean that controls whether the cluster should automatically initialize itself. This should be `true` for object-store metadata but `false` when using the `replicated` (Raft) metadata store, which requires manual provisioning.
 
 *   **Resource Management**:
-    *   `rocksdb-total-memory-size`: Sets the total memory allocated to RocksDB, which Restate uses for its internal state storage. Typically 75% of the memory requests for the pod is appropriate.
+    *   `rocksdb-total-memory-size`: Sets the total memory allocated to RocksDB, which Restate uses for its internal state storage.
     *   `admin.query-engine.memory-size`: Allocates memory for the admin service's query engine.
 
 For a complete list of all available options, please refer to the [official Restate Server Configuration Reference](https://docs.restate.dev/references/server_config).
@@ -307,10 +307,22 @@ To configure a `RestateCluster` with a self-hosted S3-compatible object store li
 
 First, we'll define a policy, create the buckets, and then create a service account with a new access key that is restricted by that policy.
 
-**Step 1.1: Create a Policy File**
-Save the following JSON content to a file named `restate-minio-policy.json`. This policy grants the necessary permissions for the two buckets Restate will use.
+The following commands use the `mc` client to set up your MinIO instance. They assume you have port-forwarded your MinIO service.
 
-```json
+```bash
+# Forward the MinIO service to your local machine
+kubectl port-forward --namespace storage svc/minio 9000:443
+
+# Alias your MinIO deployment for easier access
+# Use https:// and --insecure if connecting to a port-forwarded TLS port (like 443)
+mc alias set local-minio https://localhost:9000 YOUR_ADMIN_ACCESS_KEY YOUR_ADMIN_SECRET_KEY --insecure
+
+# Create the buckets
+mc mb --insecure local-minio/restate-metadata
+mc mb --insecure local-minio/restate-snapshots
+
+# Add the new policy to MinIO
+cat <<EOF | mc admin policy add local-minio restate-s3-policy
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -341,25 +353,7 @@ Save the following JSON content to a file named `restate-minio-policy.json`. Thi
     }
   ]
 }
-```
-
-**Step 1.2: Apply Policy and Create Service Account**
-Now, use the `mc` client to set up your MinIO instance. The following commands assume you have port-forwarded your MinIO service as described in the previous answer.
-
-```bash
-# Forward the MinIO service to your local machine
-kubectl port-forward --namespace storage svc/minio 9000:443
-
-# Alias your MinIO deployment for easier access
-# Use https:// and --insecure if connecting to a port-forwarded TLS port (like 443)
-mc alias set local-minio https://localhost:9000 YOUR_ADMIN_ACCESS_KEY YOUR_ADMIN_SECRET_KEY --insecure
-
-# Create the buckets
-mc mb --insecure local-minio/restate-metadata
-mc mb --insecure local-minio/restate-snapshots
-
-# Add the new policy to MinIO
-mc admin policy add local-minio restate-s3-policy ./restate-minio-policy.json
+EOF
 
 # Create a new service account for the Restate application
 # This command will output a new AccessKey and SecretKey.
@@ -437,6 +431,8 @@ spec:
     aws-endpoint-url = "http://minio.minio-namespace.svc.cluster.local:9000"
     aws-allow-http = true
 ```
+
+For the full schema as a [Pkl](https://pkl-lang.org/) template see [`crd/RestateCluster.pkl`](./crd/RestateCluster.pkl).
 
 
 ### `RestateDeployment`
